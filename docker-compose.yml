@@ -1,0 +1,212 @@
+services:
+  traefik:
+    image: traefik:${TRAEFIK_VERSION}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - 80:80
+      - 443:443/tcp
+    environment:
+      TZ: ${TIMEZONE}
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN}
+      TRAEFIK_DASHBOARD_CREDENTIALS: ${TRAEFIK_DASHBOARD_CREDENTIALS}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acme:/acme
+    command:
+      - "--api.dashboard=true"
+      - "--api.debug=true"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entryPoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entryPoints.websecure.address=:443"
+      - "--serversTransport.insecureSkipVerify=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedByDefault=false"
+      - "--certificatesResolvers.cloudflare.acme.email=${ACME_EMAIL}"
+      - "--certificatesResolvers.cloudflare.acme.storage=/acme/acme.json"
+      - "--certificatesResolvers.cloudflare.acme.caServer=https://acme-v02.api.letsencrypt.org/directory" # prod
+      # - "--certificatesResolvers.cloudflare.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory" # staging
+      - "--certificatesResolvers.cloudflare.acme.dnsChallenge.provider=cloudflare"
+      - "--certificatesResolvers.cloudflare.acme.dnsChallenge.resolvers=1.1.1.1:53,1.0.0.1:53"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=web"
+      - "traefik.http.routers.traefik.rule=Host(`traefik-servarr.${DOMAIN}`)"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_CREDENTIALS}"
+      - "traefik.http.middlewares.traefik-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.sslheader.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.routers.traefik.middlewares=traefik-https-redirect"
+      - "traefik.http.routers.traefik-secure.entrypoints=websecure"
+      - "traefik.http.routers.traefik-secure.rule=Host(`traefik-servarr.${DOMAIN}`)"
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-auth"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=cloudflare"
+      - "traefik.http.routers.traefik-secure.tls.domains[0].main=${DOMAIN}"
+      - "traefik.http.routers.traefik-secure.tls.domains[0].sans=*.${DOMAIN}"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:${SONARR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr.rule=Host(`sonarr.${DOMAIN}`)"
+      - "traefik.http.routers.sonarr.entrypoints=websecure"
+      - "traefik.http.routers.sonarr.tls=true"
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+    volumes:
+      - ${CONFIG_DIR}/sonarr:/config
+      - ${MEDIA_DIR}:/mnt/media
+      - ${DOWNLOADS_DIR}:/mnt/downloads
+    expose:
+      - 8989
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:${RADARR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr.rule=Host(`radarr.${DOMAIN}`)"
+      - "traefik.http.routers.radarr.entrypoints=websecure"
+      - "traefik.http.routers.radarr.tls=true"
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+    volumes:
+      - ${CONFIG_DIR}/radarr:/config
+      - ${MEDIA_DIR}:/mnt/media
+      - ${DOWNLOADS_DIR}:/mnt/downloads
+    expose:
+      - 7878
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  deluge:
+    image: lscr.io/linuxserver/deluge:${DELUGE_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.deluge.rule=Host(`deluge.${DOMAIN}`)"
+      - "traefik.http.routers.deluge.entrypoints=websecure"
+      - "traefik.http.routers.deluge.tls=true"
+      - "traefik.http.services.deluge.loadbalancer.server.port=8112"
+    volumes:
+      - ${CONFIG_DIR}/deluge:/config
+      - ${DOWNLOADS_DIR}:/mnt/downloads
+    expose:
+      - 8112 #webui
+    ports:
+      - 6881:6881 #inbound torrent traffic
+      - 6881:6881/udp #inbound torrent traffic
+      - 58846:58846 #thin client port
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:${PROWLARR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOMAIN}`)"
+      - "traefik.http.routers.prowlarr.entrypoints=websecure"
+      - "traefik.http.routers.prowlarr.tls=true"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+    volumes:
+      - ${CONFIG_DIR}/prowlarr:/config
+    expose:
+      - 9696
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:${BAZARR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      UMASK: ${UMASK}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bazarr.rule=Host(`bazarr.${DOMAIN}`)"
+      - "traefik.http.routers.bazarr.entrypoints=websecure"
+      - "traefik.http.routers.bazarr.tls=true"
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+    volumes:
+      - ${CONFIG_DIR}/bazarr:/config
+      - ${MEDIA_DIR}:/mnt/media
+    expose:
+      - 6767
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:${JELLYSEERR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellyseerr.rule=Host(`jellyseerr.${DOMAIN}`)"
+      - "traefik.http.routers.jellyseerr.entrypoints=websecure"
+      - "traefik.http.routers.jellyseerr.tls=true"
+      - "traefik.http.services.jellyseerr.loadbalancer.server.port=5055"
+    volumes:
+      - ${CONFIG_DIR}/jellyseerr:/app/config
+    expose:
+      - 5055
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  homarr:
+    image: ghcr.io/ajnart/homarr:${HOMARR_VERSION}
+    environment:
+      TZ: ${TIMEZONE}
+      BASE_URL: servarr.${DOMAIN}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homarr.rule=Host(`servarr.${DOMAIN}`)"
+      - "traefik.http.routers.homarr.entrypoints=websecure"
+      - "traefik.http.routers.homarr.tls=true"
+      - "traefik.http.services.homarr.loadbalancer.server.port=7575"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CONFIG_DIR}/homarr/config:/app/data/config
+      - ${CONFIG_DIR}/homarr/icons:/app/public/icons
+      - ${CONFIG_DIR}/homarr/data:/data
+    expose:
+      - 7575
+    networks:
+      - proxy
+    restart: unless-stopped
+
+networks:
+  proxy:
+
+volumes:
+  acme:
